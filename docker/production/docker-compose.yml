@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  app-api:
+    container_name: app-api
+    build:
+      context: ../..
+      dockerfile: docker/production/Dockerfile
+    volumes:
+      - ../../src:/app/src
+      - ../../alembic:/app/alembic:rw
+    env_file:
+      - .env
+    ports:
+      - "${APP_PORT}:8000"
+    networks:
+      - app-network
+    restart: unless-stopped
+    entrypoint: uvicorn src.main:app --host 0.0.0.0 --port 8000 --reload --log-level debug
+    # healthcheck:
+    #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+    #     interval: 30s
+    #     timeout: 10s
+    #     retries: 3
+    #     start_period: 40s
+
+
+  app-postgresql:
+    container_name: app-postgresql
+    image: postgres:15-alpine
+    volumes:
+      - ../../sql/init:/docker-entrypoint-initdb.d:ro
+      - ../../sql/bases:/sql/bases:ro
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_SOURCE=/sql/bases
+    env_file:
+      - .env
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  app-oauth2:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest
+    container_name: app-oauth2
+    restart: unless-stopped
+    depends_on:
+      - app-api
+    networks:
+      - app-network
+    env_file:
+      - .env
+    environment:
+      # - OAUTH2_PROXY_UPSTREAM=http://app-api:8000
+      - OAUTH2_PROXY_HTTP_ADDRESS=0.0.0.0:4180
+      # - OAUTH2_PROXY_SKIP_AUTH_ROUTES=^/$
+    ports:
+      - "${OAUTH2_PROXY_PORT}:4180"
+    # healthcheck:
+    #   test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4180/ping"]
+    #   interval: 30s
+    #   timeout: 5s
+    #   retries: 3
+
+  app-nginx:
+    image: nginx:alpine
+    container_name: app-nginx
+    restart: unless-stopped
+    depends_on:
+      - app-oauth2
+      - app-api
+    ports:
+      - "${NGINX_HTTP_PORT}:80"
+    volumes:
+      - ../../nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ../../nginx/conf.d:/etc/nginx/conf.d:ro
+      - ../../html:/app/static:ro
+    networks:
+      - app-network
+
+volumes:
+  postgres_data:
+
+networks:
+  app-network:
+    driver: bridge
